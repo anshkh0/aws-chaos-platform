@@ -1,8 +1,8 @@
 resource "aws_instance" "monitoring" {
-  ami           = data.aws_ami.amazon_linux.id
+  ami = data.aws_ami.amazon_linux.id
   instance_type = "t2.micro"
 
-  subnet_id              = aws_subnet.public_a.id
+  subnet_id = aws_subnet.public_a.id
   vpc_security_group_ids = [aws_security_group.monitoring_sg.id]
 
   # IAM profile gives Prometheus permission to call ec2:DescribeInstances

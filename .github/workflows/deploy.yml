@@ -35,12 +35,7 @@ jobs:
           PYTHONPATH: app
 
 
-  # ────────────────────────────────────────────────────────────
-  # JOB 2 — BUILD AND PUSH
-  # Only runs after tests pass.
-  # Builds the Docker image, scans it for vulnerabilities,
-  # then pushes to ECR.
-  # ────────────────────────────────────────────────────────────
+  # Builds the Docker image, scans it for vulnerabilities, pushes to ECR.
   build-and-push:
     name: Build and Push to ECR
     runs-on: ubuntu-latest
@@ -78,8 +73,6 @@ jobs:
         with:
           image-ref: ${{ steps.build.outputs.image }}
           format:    table
-          # Only block on CRITICAL vulnerabilities that actually have a fix
-          # available — no point failing a build over something unpatchable.
           severity:        CRITICAL
           ignore-unfixed:  true
           exit-code:       "1"
@@ -88,12 +81,8 @@ jobs:
         run: docker push ${{ steps.build.outputs.image }}
 
 
-  # ────────────────────────────────────────────────────────────
-  # JOB 3 — DEPLOY
-  # Updates the ECS task definition to use the new image
-  # and deploys it. Records the previous task definition ARN
-  # so we can roll back if chaos validation fails.
-  # ────────────────────────────────────────────────────────────
+  # Updates the ECS task definition to use the new imageand deploys it. 
+  # Records the previous task definition ARN 
   deploy:
     name: Deploy to ECS
     runs-on: ubuntu-latest
@@ -149,13 +138,9 @@ jobs:
           wait-for-service-stability: true
 
 
-  # ────────────────────────────────────────────────────────────
-  # JOB 4 — CHAOS VALIDATION
+
   # After deployment stabilizes, kill one task and measure RTO.
   # If RTO exceeds 120s, exit non-zero and trigger rollback.
-  # This is the part that makes this pipeline different —
-  # every deployment is chaos-tested before being considered done.
-  # ────────────────────────────────────────────────────────────
   chaos-validate:
     name: Chaos Validation
     runs-on: ubuntu-latest
@@ -195,13 +180,7 @@ jobs:
             --pipeline \
             --rto-threshold 120
 
-
-  # ────────────────────────────────────────────────────────────
-  # JOB 5 — ROLLBACK
-  # Only runs if chaos validation fails.
-  # Rolls ECS back to the task definition that was running
-  # before this deployment — restores the last known good state.
-  # ────────────────────────────────────────────────────────────
+  # Rolls ECS back to the task definition that was running before this deployment
   rollback:
     name: Rollback on Chaos Failure
     runs-on: ubuntu-latest

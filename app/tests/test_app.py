@@ -4,7 +4,7 @@ from app import app
 
 @pytest.fixture
 def client():
-    # Spins up the Flask test client — no real server needed
+    #Flask test client
     app.config["TESTING"] = True
     with app.test_client() as client:
         yield client
@@ -21,7 +21,6 @@ def test_index_content(client):
 
 
 def test_health_returns_200(client):
-    # This is what the ALB polls — must always return 200
     response = client.get("/health")
     assert response.status_code == 200
 
@@ -37,7 +36,6 @@ def test_metrics_returns_200(client):
 
 
 def test_metrics_content_type(client):
-    # Prometheus expects a specific content type
     response = client.get("/metrics")
     assert "text/plain" in response.content_type
 

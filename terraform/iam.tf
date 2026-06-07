@@ -1,10 +1,3 @@
-# =========================
-# IAM: MONITORING INSTANCE
-# Grants the monitoring EC2 instance permission to call
-# ec2:DescribeInstances so Prometheus EC2 service discovery
-# can find and scrape the app nodes automatically.
-# =========================
-
 resource "aws_iam_role" "monitoring_role" {
   name = "chaos-monitoring-role"
 

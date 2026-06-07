@@ -7,9 +7,7 @@ from prometheus_client import (
 
 app = Flask(__name__)
 
-# --- Prometheus metrics ---
-# Real metrics tracked per request, replacing the static stub
-# values Apache was serving before.
+#Prometheus metrics
 REQUEST_COUNT = Counter(
     "http_requests_total",
     "Total HTTP requests received",
@@ -29,7 +27,7 @@ HEALTH_STATUS = Gauge(
 HEALTH_STATUS.set(1)
 
 
-# --- Middleware: time and count every request ---
+#Middleware: time and count every request
 @app.before_request
 def start_timer():
     request._start_time = time.time()
@@ -49,23 +47,20 @@ def track_metrics(response):
     return response
 
 
-# --- Routes ---
-
+# Routes
 @app.route("/")
 def index():
-    # Same message the old Apache static file served
     return "OK - Chaos Platform Running", 200
 
 
 @app.route("/health")
 def health():
-    # ALB polls this every 30s — must return 200 to stay in rotation
     return "OK", 200
 
 
 @app.route("/metrics")
 def metrics():
-    # Real Prometheus metrics — replaces the hardcoded stub in Apache
+    # Real Prometheus metrics
     return Response(generate_latest(), mimetype=CONTENT_TYPE_LATEST)
 
 

@@ -32,11 +32,11 @@ systemctl start httpd
 # WEB APP
 echo "OK - Chaos Platform Running" > /var/www/html/index.html
 
-# Health endpoint: ALB checks GET /health → must return 200
+# Health endpoint
 echo "OK" > /var/www/html/health
 chmod 644 /var/www/html/health
 
-# Metrics endpoint: static Prometheus-format stub
+# Metrics endpoint
 cat > /var/www/html/metrics <<EOT
 http_requests_total 42
 cpu_usage_mock 0.12
@@ -144,8 +144,7 @@ resource "aws_autoscaling_group" "app_asg" {
   health_check_type         = "ELB"
   health_check_grace_period = 300
 
-  # Rolling refresh: when the launch template version changes,
-  # Terraform automatically replaces instances without full teardown.
+  # Rolling refresh: when the launch template version changes, Terraform automatically replaces instances without full teardown.
   instance_refresh {
     strategy = "Rolling"
     preferences {
@@ -155,16 +154,15 @@ resource "aws_autoscaling_group" "app_asg" {
 
   # Name tag for console visibility
   tag {
-    key                 = "Name"
-    value               = "chaos-app"
+    key = "Name"
+    value = "chaos-app"
     propagate_at_launch = true
   }
 
-  # Role tag: Prometheus EC2 service discovery filters on this
-  # to find app instances (vs the monitoring server)
+  # Role tag:
   tag {
-    key                 = "Role"
-    value               = "app"
+    key = "Role"
+    value = "app"
     propagate_at_launch = true
   }
 }

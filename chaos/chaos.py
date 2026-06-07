@@ -17,7 +17,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 
-# ── Helpers ──────────────────────────────────────────────────
+# Helpers
 
 def ts():
     return datetime.now(timezone.utc).strftime("%H:%M:%S")
@@ -35,20 +35,6 @@ def get_running_tasks(ecs, cluster, service):
         desiredStatus="RUNNING"
     )
     return resp.get("taskArns", [])
-
-
-def get_task_ips(ecs, cluster, task_arns):
-    """Return {task_arn: private_ip} for each task."""
-    if not task_arns:
-        return {}
-    resp = ecs.describe_tasks(cluster=cluster, tasks=task_arns)
-    result = {}
-    for task in resp.get("tasks", []):
-        for attachment in task.get("attachments", []):
-            for detail in attachment.get("details", []):
-                if detail["name"] == "privateIPv4Address":
-                    result[task["taskArn"]] = detail["value"]
-    return result
 
 
 def healthy_target_ips(elbv2, tg_arn):
@@ -70,7 +56,7 @@ def all_target_states(elbv2, tg_arn):
     }
 
 
-# ── Core experiment ───────────────────────────────────────────
+# Core experiment 
 
 def run_experiment(region, cluster, service, tg_arn, dry_run, poll_interval, timeout):
     """
@@ -82,7 +68,7 @@ def run_experiment(region, cluster, service, tg_arn, dry_run, poll_interval, tim
     ecs   = boto3.client("ecs",   region_name=region)
     elbv2 = boto3.client("elbv2", region_name=region)
 
-    # ── 1. Snapshot healthy targets before chaos ──
+    # Snapshot healthy targets before chaos
     baseline_healthy = healthy_target_ips(elbv2, tg_arn)
     log(f"Healthy task IPs before chaos: {sorted(baseline_healthy) or 'NONE'}")
 
@@ -90,7 +76,7 @@ def run_experiment(region, cluster, service, tg_arn, dry_run, poll_interval, tim
         log("ERROR: No healthy tasks. Is the service stable?")
         sys.exit(1)
 
-    # ── 2. Pick a victim task and stop it ──
+    #Picking a victim task and stoping it
     running_tasks = get_running_tasks(ecs, cluster, service)
     if not running_tasks:
         log("ERROR: No running tasks found.")
@@ -120,7 +106,7 @@ def run_experiment(region, cluster, service, tg_arn, dry_run, poll_interval, tim
     log(f"Kill issued. Waiting for recovery "
         f"(poll every {poll_interval}s, timeout {timeout}s)...")
 
-    # ── 3. Poll until a NEW healthy task IP appears ──
+    #Poll until a new healthy task IP appears
     deadline = kill_time + timeout
 
     while time.monotonic() < deadline:
@@ -134,7 +120,7 @@ def run_experiment(region, cluster, service, tg_arn, dry_run, poll_interval, tim
         state_summary = ", ".join(f"{ip}={s}" for ip, s in sorted(states.items()))
         log(f"  t+{elapsed:>3}s | {state_summary or 'no targets registered'}")
 
-        # Recovery = a brand-new IP is healthy AND we're back to original count
+        # Recovery = a brand-new IP is healthy and back to original count
         if new_healthy and len(healthy_now) >= len(baseline_healthy):
             rto = time.monotonic() - kill_time
             log("")
@@ -146,7 +132,7 @@ def run_experiment(region, cluster, service, tg_arn, dry_run, poll_interval, tim
     return None
 
 
-# ── Entry point ───────────────────────────────────────────────
+# Entry point
 
 def main():
     parser = argparse.ArgumentParser(
@@ -162,8 +148,8 @@ def main():
     parser.add_argument("--timeout",       type=int, default=300)
     parser.add_argument("--dry-run",       action="store_true")
 
-    # Pipeline mode: exit non-zero if mean RTO exceeds threshold.
-    # GitHub Actions checks the exit code — non-zero triggers rollback.
+    # Exit non-zero if mean RTO exceeds threshold.
+    # GitHub Actions checks the exit code, non-zero triggers rollback.
     parser.add_argument("--pipeline",      action="store_true",
                         help="Exit non-zero if RTO exceeds threshold (for CI)")
     parser.add_argument("--rto-threshold", type=float, default=120.0,
@@ -201,7 +187,7 @@ def main():
             time.sleep(settle)
             log("")
 
-    # ── Summary ──
+    # Summary
     if results:
         log("=" * 60)
         log("RESULTS")
@@ -216,7 +202,7 @@ def main():
         log(f"  Worst RTO             : {max(results):.1f}s")
         log("=" * 60)
 
-        # Pipeline mode: fail the build if RTO is too slow
+        # fail the build if RTO is too slow
         if args.pipeline:
             if mean > args.rto_threshold:
                 log("")
