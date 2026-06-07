@@ -14,11 +14,6 @@ env:
 
 jobs:
 
-  # ────────────────────────────────────────────────────────────
-  # JOB 1 — TEST
-  # Run pytest before building anything.
-  # If tests fail, the pipeline stops here — nothing gets deployed.
-  # ────────────────────────────────────────────────────────────
   test:
     name: Run Tests
     runs-on: ubuntu-latest
@@ -83,9 +78,11 @@ jobs:
         with:
           image-ref: ${{ steps.build.outputs.image }}
           format:    table
-          # Fail the pipeline if any CRITICAL vulnerabilities are found
-          severity:  CRITICAL
-          exit-code: "1"
+          # Only block on CRITICAL vulnerabilities that actually have a fix
+          # available — no point failing a build over something unpatchable.
+          severity:        CRITICAL
+          ignore-unfixed:  true
+          exit-code:       "1"
 
       - name: Push image to ECR
         run: docker push ${{ steps.build.outputs.image }}
@@ -190,7 +187,7 @@ jobs:
       - name: Run chaos validation
         id: chaos
         run: |
-          python chaos.py \
+          python chaos/chaos.py \
             --cluster  $ECS_CLUSTER \
             --service  $ECS_SERVICE \
             --tg-arn   ${{ steps.get-tg.outputs.arn }} \
