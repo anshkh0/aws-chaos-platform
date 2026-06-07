@@ -1,0 +1,231 @@
+name: Build, Deploy, and Validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  AWS_REGION:     us-east-2
+  ECR_REPOSITORY: chaos-platform-app
+  ECS_CLUSTER:    chaos-platform-cluster
+  ECS_SERVICE:    chaos-platform-service
+
+jobs:
+
+  # ────────────────────────────────────────────────────────────
+  # JOB 1 — TEST
+  # Run pytest before building anything.
+  # If tests fail, the pipeline stops here — nothing gets deployed.
+  # ────────────────────────────────────────────────────────────
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r app/requirements.txt pytest
+
+      - name: Run pytest
+        run: pytest app/tests/ -v
+        env:
+          PYTHONPATH: app
+
+
+  # ────────────────────────────────────────────────────────────
+  # JOB 2 — BUILD AND PUSH
+  # Only runs after tests pass.
+  # Builds the Docker image, scans it for vulnerabilities,
+  # then pushes to ECR.
+  # ────────────────────────────────────────────────────────────
+  build-and-push:
+    name: Build and Push to ECR
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main'
+
+    outputs:
+      image: ${{ steps.build.outputs.image }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Log in to ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build Docker image
+        id: build
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          IMAGE=$ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }}
+          docker build -t $IMAGE ./app
+          echo "image=$IMAGE" >> $GITHUB_OUTPUT
+
+      - name: Scan image for vulnerabilities (Trivy)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.build.outputs.image }}
+          format:    table
+          # Fail the pipeline if any CRITICAL vulnerabilities are found
+          severity:  CRITICAL
+          exit-code: "1"
+
+      - name: Push image to ECR
+        run: docker push ${{ steps.build.outputs.image }}
+
+
+  # ────────────────────────────────────────────────────────────
+  # JOB 3 — DEPLOY
+  # Updates the ECS task definition to use the new image
+  # and deploys it. Records the previous task definition ARN
+  # so we can roll back if chaos validation fails.
+  # ────────────────────────────────────────────────────────────
+  deploy:
+    name: Deploy to ECS
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main'
+
+    outputs:
+      previous-task-def: ${{ steps.get-previous.outputs.arn }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Record current task definition (for rollback)
+        id: get-previous
+        run: |
+          ARN=$(aws ecs describe-services \
+            --cluster $ECS_CLUSTER \
+            --services $ECS_SERVICE \
+            --query "services[0].taskDefinition" \
+            --output text)
+          echo "arn=$ARN" >> $GITHUB_OUTPUT
+          echo "Previous task definition: $ARN"
+
+      - name: Download current task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition chaos-platform-app \
+            --query taskDefinition \
+            > task-definition.json
+
+      - name: Update task definition with new image
+        id: update-task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name:  app
+          image:           ${{ needs.build-and-push.outputs.image }}
+
+      - name: Deploy updated task definition to ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition:       ${{ steps.update-task-def.outputs.task-definition }}
+          service:               ${{ env.ECS_SERVICE }}
+          cluster:               ${{ env.ECS_CLUSTER }}
+          # Wait until ECS confirms the new tasks are healthy before moving on
+          wait-for-service-stability: true
+
+
+  # ────────────────────────────────────────────────────────────
+  # JOB 4 — CHAOS VALIDATION
+  # After deployment stabilizes, kill one task and measure RTO.
+  # If RTO exceeds 120s, exit non-zero and trigger rollback.
+  # This is the part that makes this pipeline different —
+  # every deployment is chaos-tested before being considered done.
+  # ────────────────────────────────────────────────────────────
+  chaos-validate:
+    name: Chaos Validation
+    runs-on: ubuntu-latest
+    needs: deploy
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Install chaos tool dependencies
+        run: pip install boto3
+
+      - name: Get ECS target group ARN
+        id: get-tg
+        run: |
+          TG_ARN=$(aws elbv2 describe-target-groups \
+            --names chaos-ecs-tg \
+            --query "TargetGroups[0].TargetGroupArn" \
+            --output text)
+          echo "arn=$TG_ARN" >> $GITHUB_OUTPUT
+
+      - name: Run chaos validation
+        id: chaos
+        run: |
+          python chaos.py \
+            --cluster  $ECS_CLUSTER \
+            --service  $ECS_SERVICE \
+            --tg-arn   ${{ steps.get-tg.outputs.arn }} \
+            --trials   1 \
+            --pipeline \
+            --rto-threshold 120
+
+
+  # ────────────────────────────────────────────────────────────
+  # JOB 5 — ROLLBACK
+  # Only runs if chaos validation fails.
+  # Rolls ECS back to the task definition that was running
+  # before this deployment — restores the last known good state.
+  # ────────────────────────────────────────────────────────────
+  rollback:
+    name: Rollback on Chaos Failure
+    runs-on: ubuntu-latest
+    needs: [deploy, chaos-validate]
+    # Only trigger if chaos validation explicitly failed
+    if: failure() && needs.chaos-validate.result == 'failure'
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Roll back to previous task definition
+        run: |
+          PREVIOUS="${{ needs.deploy.outputs.previous-task-def }}"
+          echo "Rolling back to: $PREVIOUS"
+          aws ecs update-service \
+            --cluster $ECS_CLUSTER \
+            --service $ECS_SERVICE \
+            --task-definition $PREVIOUS
+          echo "Rollback complete."
